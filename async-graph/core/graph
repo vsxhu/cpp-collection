@@ -1,0 +1,115 @@
+#pragma once
+
+#include <shared_mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "async-graph/concurrent/thread_pool.h"
+#include "func_register.h"
+
+class TaskNode {
+   public:
+    TaskNode() = default;
+    TaskNode(KernelFunc func, std::string name)
+        : func_(std::move(func)), node_name_(std::move(name)) {
+        context_ = std::make_unique<KernelContext>();
+    };
+
+    KernelFunc GetFunc() { return func_; }
+    std::string GetName() { return node_name_; }
+
+    void AddSuccessor(TaskNode* node) {
+        successors_.push_back(node);
+        node->deps_.push_back(this);
+    }
+
+    std::shared_ptr<KernelContext> GetContext() { return context_; }
+    std::vector<TaskNode*> GetSuccessors() { return successors_; }
+    std::vector<TaskNode*> GetDeps() { return deps_; }
+
+   private:
+    KernelFunc func_;
+    std::string node_name_;
+    std::shared_ptr<KernelContext> context_;
+
+    std::vector<TaskNode*> deps_;
+    std::vector<TaskNode*> successors_;
+};
+
+class Graph {
+   public:
+    Graph() { pool_ptr_ = std::make_unique<ThreadPool>(2); }
+
+    void AddNode(TaskNode* node) {
+        std::unique_ptr<TaskNode> ptr(node);
+        nodes_.emplace_back(std::move(ptr));
+    }
+
+    std::shared_ptr<TaskNode> GetNode(const std::string& name) {
+        for (auto node : nodes_) {
+            if (node->GetName() == name) {
+                return node;
+            }
+        }
+        return nullptr;
+    }
+
+    void Run(bool sync = true) {
+        std::vector<TaskNode*> ready_nodes;
+        for (auto&& deps : nodes_deps_) {
+            if (deps.second == 0) {
+                ready_nodes.push_back(deps.first);
+            }
+        }
+        for (auto* node : ready_nodes) {
+            pool_ptr_->Enqueue([this, node]() -> void { Process(node); });
+        }
+        if (sync) {
+            Wait();
+        }
+    }
+
+    void Build() {
+        for (auto&& node : nodes_) {
+            nodes_deps_.insert(std::make_pair(node.get(), 0));
+        }
+
+        for (const auto& node : nodes_) {
+            for (const auto& successor : node->GetSuccessors()) {
+                nodes_deps_[successor].fetch_add(1);
+            }
+        }
+    }
+
+   private:
+    void Wait() {}
+
+    void Process(TaskNode* ready_node) {
+        auto func = ready_node->GetFunc();
+        auto node_context = ready_node->GetContext();
+        for (auto* dep_node : ready_node->GetDeps()) {
+            auto dep_context = dep_node->GetContext();
+            for (int i = 0, len = static_cast<int>(dep_context->GetOutputSize()); i < len; ++i) {
+                auto out = dep_context->GetOutput(i);
+                node_context->AddInput(out);
+            }
+        }
+        func(node_context.get());
+
+        std::vector<TaskNode*> new_ready_nodes;
+        for (auto&& successor : ready_node->GetSuccessors()) {
+            if (nodes_deps_[successor].fetch_sub(1) == 1) {
+                new_ready_nodes.emplace_back(successor);
+            }
+        }
+
+        for (auto new_ready_node : new_ready_nodes) {
+            pool_ptr_->Enqueue([this, new_ready_node]() -> void { Process(new_ready_node); });
+        }
+    }
+
+    std::vector<std::shared_ptr<TaskNode>> nodes_;
+    std::unordered_map<TaskNode*, std::atomic<int>> nodes_deps_;
+    std::unique_ptr<ThreadPool> pool_ptr_;
+};
