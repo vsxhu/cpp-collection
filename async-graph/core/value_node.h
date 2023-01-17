@@ -4,7 +4,12 @@
 
 class ValueNode : public std::enable_shared_from_this<ValueNode>{
    public:
-    ~ValueNode() = default;
+    ValueNode(const ValueNode&)=delete;
+    ValueNode& operator=(const ValueNode&)=delete;
+
+    ~ValueNode(){
+        WakeUpSuccessor();
+    }
 
     template <class T>
     explicit ValueNode(const T& val)
@@ -12,28 +17,30 @@ class ValueNode : public std::enable_shared_from_this<ValueNode>{
         value_holder = std::make_unique<ValueHolder<T>>(val);
     }
 
-    ValueNode& operator=(const ValueNode& rhs) {
-        value_holder = rhs.value_holder->Clone();
-        return *this;
-    }
-
-    ValueNode(const ValueNode& rhs){
-        *this = rhs;
-    }
-
     template <class T>
     T& Get(){
         if (auto p = dynamic_cast<ValueHolder<T>*>(value_holder.get())){
             return p->val_;
         }
-        throw std::logic_error("bad value cast");
+        throw std::logic_error("Bad value cast");
+    }
+
+    template <class T, class ... Args>
+    void Emplace(Args&& ... args){
+        if (auto p = dynamic_cast<ValueHolder<T>*>(value_holder.get())){
+            p->Emplace(std::forward<Args>(args)...);
+        }else{
+            throw std::logic_error("Bad value cast when using emplace");
+        }
+    }
+
+    void WakeUpSuccessor(){
     }
 
    private:
     class ValueHolderBase {
        public:
         virtual ~ValueHolderBase() = default;
-        virtual std::unique_ptr<ValueHolderBase> Clone() = 0;
     };
 
     template <class T>
@@ -41,9 +48,9 @@ class ValueNode : public std::enable_shared_from_this<ValueNode>{
        public:
         explicit ValueHolder(T val) : val_(val){};
 
-        std::unique_ptr<ValueHolderBase> Clone() override {
-            // if constexpr (std::is_copy_constructible_v<T>){
-            return std::make_unique<ValueHolder<T>>(val_);
+        template <class ... Args>
+        void Emplace(Args&& ... args){
+            new(&val_) T(std::forward<Args>(args)...);
         }
 
         T val_;

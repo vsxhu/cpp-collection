@@ -1,4 +1,5 @@
 #include "toys/Any.h"
+static void DigitReplace(std::string& msg, T&& digit){
 #include <iostream>
 
 class A{

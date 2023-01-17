@@ -2,9 +2,7 @@
 #include <iostream>
 #include <thread>
 
-#include "async-graph/core/executor.h"
-#include "async-graph/core/func_register.h"
-#include "async-graph/core/value_node.h"
+#include "async-graph/graph.h"
 
 void Kernel1(KernelContext* frame) {
     auto val = frame->GetInput<int>(0);
@@ -42,5 +40,7 @@ int main() {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     std::cout << graph.GetNode("Kernel3")->GetContext()->GetOutput<int>(0) << std::endl;
     ValueNode val{1};
+    std::cout << val.Get<int>() << std::endl;
+    val.Emplace<int>(2);
     std::cout << val.Get<int>() << std::endl;
 }
